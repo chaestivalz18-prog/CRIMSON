@@ -2439,8 +2439,18 @@ window.supabaseClient = window.supabase.createClient(
             })
             .then(function (response) {
               if (response.error) throw response.error;
+
+              const data = response.data;
+
+              // ch_api menggunakan {success:false,message} untuk error bisnis.
+              // Jangan meneruskannya sebagai data sukses ke UI karena beberapa
+              // halaman mengharapkan Array dan kemudian memanggil forEach/filter.
+              if (data && typeof data === 'object' && !Array.isArray(data) && data.success === false) {
+                throw new Error(data.message || 'Terjadi kesalahan pada backend Supabase.');
+              }
+
               if (typeof successHandler === 'function') {
-                successHandler(response.data);
+                successHandler(data);
               }
             })
             .catch(function (err) {
@@ -7634,7 +7644,9 @@ function getItemsPromise() {
   return runPromise(
     'getItemsPublic',
     [TOKEN]
-  );
+  ).then(function(value) {
+    return normalizeArrayResult_(value, ['items','data']);
+  });
 
 }
 
@@ -7644,7 +7656,9 @@ function getMembersPromise() {
   return runPromise(
     'getMembers',
     [TOKEN]
-  );
+  ).then(function(value) {
+    return normalizeArrayResult_(value, ['members','data']);
+  });
 
 }
 
@@ -7654,8 +7668,32 @@ function getStaffPromise() {
   return runPromise(
     'getActiveStaff',
     [TOKEN]
-  );
+  ).then(function(value) {
+    return normalizeArrayResult_(value, ['staff','users','data']);
+  });
 
+}
+
+
+function normalizeArrayResult_(value, preferredKeys) {
+
+  if (Array.isArray(value)) return value;
+
+  if (!value || typeof value !== 'object') return [];
+
+  const keys = Array.isArray(preferredKeys) ? preferredKeys : [];
+
+  for (let i = 0; i < keys.length; i++) {
+    if (Array.isArray(value[keys[i]])) return value[keys[i]];
+  }
+
+  // Be tolerant of common API envelopes.
+  if (Array.isArray(value.data)) return value.data;
+  if (Array.isArray(value.result)) return value.result;
+  if (Array.isArray(value.rows)) return value.rows;
+  if (Array.isArray(value.items)) return value.items;
+
+  return [];
 }
 
 
@@ -7664,7 +7702,9 @@ function getKasbonPromise() {
   return runPromise(
     'getKasbonData',
     [TOKEN]
-  );
+  ).then(function(value) {
+    return normalizeArrayResult_(value, ['balances','kasbon','data']);
+  });
 
 }
 
@@ -7674,7 +7714,9 @@ function getKasbonHistoryPromise() {
   return runPromise(
     'getKasbonHistory',
     [TOKEN]
-  );
+  ).then(function(value) {
+    return normalizeArrayResult_(value, ['history','kasbonHistory','data']);
+  });
 
 }
 
@@ -7704,7 +7746,9 @@ function getHistoryPromise() {
   return runPromise(
     'getHistory',
     [TOKEN]
-  );
+  ).then(function(value) {
+    return normalizeArrayResult_(value, ['history','data']);
+  });
 
 }
 
@@ -7714,7 +7758,9 @@ function getPickupHistoryPromise() {
   return runPromise(
     'getPickupHistory',
     [TOKEN]
-  );
+  ).then(function(value) {
+    return normalizeArrayResult_(value, ['history','pickups','data']);
+  });
 
 }
 
