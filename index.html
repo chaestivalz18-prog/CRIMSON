@@ -2377,29 +2377,35 @@ th{color:#efd39b!important;letter-spacing:.7px!important}
   document.querySelectorAll('img[data-shared-logo="1"]').forEach(function(img){ img.src=logo; });
 })();
 </script>
-<!-- CRIMSON HERITAGE — SUPABASE BACKEND -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+/*
+ * CRIMSON HERITAGE — SUPABASE BACKEND
+ * Frontend compatibility layer:
+ * existing UI calls google.script.run, but there is NO Apps Script.
+ * Every method is routed directly to Supabase RPC `ch_api`.
+ */
 window.CH_CONFIG = {
   SUPABASE_URL: 'https://ulqtiyqvdrexzdcsfczy.supabase.co',
   SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_SqV9oZ7MQ_MMEOar7Nkmjw_wMNnQXfy'
 };
 
-window.supabaseClient = window.supabase.createClient(
+window.CH_SUPABASE = window.supabase.createClient(
   window.CH_CONFIG.SUPABASE_URL,
   window.CH_CONFIG.SUPABASE_PUBLISHABLE_KEY,
   {
-    auth: { persistSession: false, autoRefreshToken: false }
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false
+    }
   }
 );
 
-/*
- * Compatibility bridge:
- * Existing Crimson Heritage UI still calls google.script.run.
- * Instead of Apps Script, every call is routed to the Supabase
- * PostgreSQL RPC `ch_api`.
- */
 (function () {
+  function asArray(value) {
+    return Array.isArray(value) ? value : [];
+  }
+
   function makeRunner(successHandler, failureHandler) {
     return new Proxy({}, {
       get: function (target, prop) {
@@ -2411,6 +2417,7 @@ window.supabaseClient = window.supabase.createClient(
             );
           };
         }
+
         if (prop === 'withFailureHandler') {
           return function (fn) {
             return makeRunner(
@@ -2419,46 +2426,63 @@ window.supabaseClient = window.supabase.createClient(
             );
           };
         }
+
         if (prop === 'withUserObject') {
           return function () {
             return makeRunner(successHandler, failureHandler);
           };
         }
+
         if (prop === 'then') return undefined;
 
         return function () {
-          const args = Array.prototype.slice.call(arguments);
-          const method = String(prop);
-          const token = localStorage.getItem('CH_TOKEN') || '';
+          var args = Array.prototype.slice.call(arguments);
+          var method = String(prop);
+          var token = (typeof TOKEN !== 'undefined' && TOKEN)
+            ? TOKEN
+            : (localStorage.getItem('CH_TOKEN') || '');
 
-          window.supabaseClient
+          window.CH_SUPABASE
             .rpc('ch_api', {
               p_method: method,
               p_args: args,
-              p_token: token
+              p_token: method.toUpperCase() === 'LOGIN' ? '' : token
             })
             .then(function (response) {
-              if (response.error) throw response.error;
-
-              const data = response.data;
-
-              // ch_api menggunakan {success:false,message} untuk error bisnis.
-              // Jangan meneruskannya sebagai data sukses ke UI karena beberapa
-              // halaman mengharapkan Array dan kemudian memanggil forEach/filter.
-              if (data && typeof data === 'object' && !Array.isArray(data) && data.success === false) {
-                throw new Error(data.message || 'Terjadi kesalahan pada backend Supabase.');
+              if (response.error) {
+                throw response.error;
               }
 
+              var data = response.data;
+
+              if (data && data.success === false) {
+                throw new Error(data.message || 'Terjadi kesalahan pada server.');
+              }
+
+              /*
+               * Keep the old Google Apps Script return contract:
+               * arrays stay arrays; objects stay objects.
+               */
               if (typeof successHandler === 'function') {
                 successHandler(data);
               }
             })
             .catch(function (err) {
-              const error = new Error(
-                err && (err.message || err.details || err.hint)
-                  ? (err.message || err.details || err.hint)
-                  : 'Terjadi kesalahan pada Supabase.'
-              );
+              var message =
+                err && (
+                  err.message ||
+                  err.details ||
+                  err.hint
+                )
+                  ? (
+                    err.message ||
+                    err.details ||
+                    err.hint
+                  )
+                  : 'Terjadi kesalahan pada Supabase.';
+
+              var error = new Error(message);
+
               if (typeof failureHandler === 'function') {
                 failureHandler(error);
               } else {
@@ -2470,12 +2494,22 @@ window.supabaseClient = window.supabase.createClient(
     });
   }
 
+  /*
+   * Existing HTML intentionally keeps this namespace so we do not
+   * have to rewrite hundreds of UI handlers. It is NOT Apps Script.
+   */
   window.google = window.google || {};
   window.google.script = window.google.script || {};
   window.google.script.run = makeRunner(null, null);
+
+  /*
+   * Small safety normalization for old renderers.
+   * A failed/empty array endpoint should never crash with
+   * "forEach is not a function".
+   */
+  window.CH_ARRAY = asArray;
 })();
 </script>
-
 
 <script>
 
@@ -7644,9 +7678,7 @@ function getItemsPromise() {
   return runPromise(
     'getItemsPublic',
     [TOKEN]
-  ).then(function(value) {
-    return normalizeArrayResult_(value, ['items','data']);
-  });
+  );
 
 }
 
@@ -7656,9 +7688,7 @@ function getMembersPromise() {
   return runPromise(
     'getMembers',
     [TOKEN]
-  ).then(function(value) {
-    return normalizeArrayResult_(value, ['members','data']);
-  });
+  );
 
 }
 
@@ -7668,32 +7698,8 @@ function getStaffPromise() {
   return runPromise(
     'getActiveStaff',
     [TOKEN]
-  ).then(function(value) {
-    return normalizeArrayResult_(value, ['staff','users','data']);
-  });
+  );
 
-}
-
-
-function normalizeArrayResult_(value, preferredKeys) {
-
-  if (Array.isArray(value)) return value;
-
-  if (!value || typeof value !== 'object') return [];
-
-  const keys = Array.isArray(preferredKeys) ? preferredKeys : [];
-
-  for (let i = 0; i < keys.length; i++) {
-    if (Array.isArray(value[keys[i]])) return value[keys[i]];
-  }
-
-  // Be tolerant of common API envelopes.
-  if (Array.isArray(value.data)) return value.data;
-  if (Array.isArray(value.result)) return value.result;
-  if (Array.isArray(value.rows)) return value.rows;
-  if (Array.isArray(value.items)) return value.items;
-
-  return [];
 }
 
 
@@ -7702,9 +7708,7 @@ function getKasbonPromise() {
   return runPromise(
     'getKasbonData',
     [TOKEN]
-  ).then(function(value) {
-    return normalizeArrayResult_(value, ['balances','kasbon','data']);
-  });
+  );
 
 }
 
@@ -7714,9 +7718,7 @@ function getKasbonHistoryPromise() {
   return runPromise(
     'getKasbonHistory',
     [TOKEN]
-  ).then(function(value) {
-    return normalizeArrayResult_(value, ['history','kasbonHistory','data']);
-  });
+  );
 
 }
 
@@ -7746,9 +7748,7 @@ function getHistoryPromise() {
   return runPromise(
     'getHistory',
     [TOKEN]
-  ).then(function(value) {
-    return normalizeArrayResult_(value, ['history','data']);
-  });
+  );
 
 }
 
@@ -7758,9 +7758,7 @@ function getPickupHistoryPromise() {
   return runPromise(
     'getPickupHistory',
     [TOKEN]
-  ).then(function(value) {
-    return normalizeArrayResult_(value, ['history','pickups','data']);
-  });
+  );
 
 }
 
